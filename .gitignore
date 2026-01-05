@@ -1,0 +1,5 @@
+# 配置文件（包含敏感信息）
+config.py
+
+# Claude Code 配置目录
+.claude/

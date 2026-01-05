@@ -1,0 +1,39 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+相册备份同步配置文件
+包含所有可配置的常量
+
+使用说明：
+1. 复制此文件为 config.py
+2. 根据实际情况修改以下配置
+"""
+
+from pathlib import Path
+
+# ============ 配置区域 ============
+
+# Windows 本地源目录
+SOURCE_BASE = Path("D:/path/to/your/album/backup/")  # 改为你的本地相册目录
+
+# 远程 Linux 服务器配置
+REMOTE_USER = "your_username"      # 改为你的 SSH 用户名
+REMOTE_HOST = "192.168.x.x"        # 改为你的 Linux 服务器 IP
+REMOTE_PORT = 22                   # SSH 端口（通常为22）
+
+# 远程目标目录
+REMOTE_TARGET_BASE = "/path/to/backup1"      # 第一个备份目标路径
+REMOTE_TARGET_BASE2 = "/path/to/backup2"     # 第二个备份目标路径
+
+# rsync 路径 (如果不在 PATH 中，需要指定完整路径)
+RSYNC_PATH = "rsync"  # 或 "C:/cwRsync/bin/rsync.exe"
+
+# SSH 路径 (使用 cwRsync 自带的 SSH)
+SSH_PATH = r"D:\path\to\cwrsync\bin\ssh.exe"
+
+# 清理时需要排除的目录名称集合
+# 这些目录即使超过清理天数也不会被删除
+# 示例: EXCLUDE_CLEANUP_DIRS = {"重要目录", "另一个目录"}
+EXCLUDE_CLEANUP_DIRS = set()
+
+# ============ 配置结束 ============
