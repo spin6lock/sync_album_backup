@@ -11,6 +11,7 @@
 
 import os
 import subprocess
+import shutil
 from pathlib import Path
 from datetime import datetime
 import time
@@ -25,6 +26,7 @@ from config import (
     RSYNC_PATH,
     SSH_PATH,
     EXCLUDE_CLEANUP_DIRS,
+    REMOTE_SYNC_TO_PIXEL_CMD,
 )
 
 
@@ -69,21 +71,29 @@ def sync_directory(src_dir: Path, remote_path: str) -> None:
 
 
 def cleanup_old_dirs(source_base: Path, days: int = 30) -> None:
-    """清理本地源目录中超过指定天数的目录"""
-    print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 开始清理本地过期目录（超过30天）...")
+    """清理本地源目录中超过指定天数的日期子目录（source_base/*/*）"""
+    print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 开始清理本地过期目录（超过{days}天）...")
 
     try:
-        # 查找本地过期目录
+        # 查找本地过期的日期子目录（例如: 相册备份/Mini4Pro/20260301）
         old_dirs = []
         now = time.time()
         cutoff_time = now - (days * 24 * 60 * 60)
 
-        for item in source_base.iterdir():
-            if item.is_dir():
-                # 获取目录的最后修改时间
-                dir_mtime = item.stat().st_mtime
-                if dir_mtime < cutoff_time and item.name not in EXCLUDE_CLEANUP_DIRS:
-                    old_dirs.append(item)
+        for parent_dir in source_base.iterdir():
+            if not parent_dir.is_dir():
+                continue
+            if parent_dir.name in EXCLUDE_CLEANUP_DIRS:
+                continue
+
+            for child_dir in parent_dir.iterdir():
+                if not child_dir.is_dir():
+                    continue
+
+                # 获取日期子目录的最后修改时间
+                dir_mtime = child_dir.stat().st_mtime
+                if dir_mtime < cutoff_time:
+                    old_dirs.append(child_dir)
 
         if not old_dirs:
             print("  没有找到需要清理的过期目录")
@@ -97,7 +107,6 @@ def cleanup_old_dirs(source_base: Path, days: int = 30) -> None:
         if reply == "y":
             for d in old_dirs:
                 try:
-                    import shutil
                     shutil.rmtree(d)
                     print(f"  已删除: {d}")
                 except Exception as e:
@@ -121,7 +130,7 @@ def sync_to_pixel():
         ssh_path_unix,
         "-p", str(REMOTE_PORT),
         f"{REMOTE_USER}@{REMOTE_HOST}",
-        "sync_to_pixel"
+        REMOTE_SYNC_TO_PIXEL_CMD
     ]
 
     print(f"  命令: {' '.join(cmd)}")
