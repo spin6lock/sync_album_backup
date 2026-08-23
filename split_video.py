@@ -33,6 +33,7 @@ from config import (
     SPLIT_MIN_SIZE_MB,
     SPLIT_SIZE_RATIO,
     SPLIT_MIN_DATE,
+    SPLIT_TMP_BASE,
     VIDEO_EXTENSIONS,
 )
 
@@ -189,15 +190,21 @@ def collect_videos() -> list[Path]:
 
 def split_one(path: Path) -> bool:
     """切换单个视频(保留原视频), 返回是否成功"""
-    # 清理上次中断残留的临时目录
-    tmp_dir = path.with_name(path.name + TMP_SUFFIX)
-    if tmp_dir.is_dir():
-        print(f"  发现残留临时目录, 清理: {tmp_dir.name}")
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-
     if has_existing_parts(path):
         print(f"  已存在切片, 跳过: {path.name}")
         return True
+
+    # 临时目录: 优先用 SSD 暂存盘(读写分盘提速), 否则切到源文件旁边
+    if SPLIT_TMP_BASE:
+        tmp_dir = SPLIT_TMP_BASE / (path.stem + TMP_SUFFIX)
+        if tmp_dir.is_dir():
+            print(f"  发现残留暂存目录, 清理: {tmp_dir}")
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+    else:
+        tmp_dir = path.with_name(path.name + TMP_SUFFIX)
+        if tmp_dir.is_dir():
+            print(f"  发现残留临时目录, 清理: {tmp_dir.name}")
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
     size_bytes = path.stat().st_size
     duration, content_bps = probe_file(path)
@@ -216,7 +223,7 @@ def split_one(path: Path) -> bool:
           f"文件码率: {file_bps / 1e6:.1f}Mbps, 内容码率: {bps / 1e6:.1f}Mbps")
     print(f"  每段约 {seg_seconds:.1f}s, 预计 {expected_parts} 片")
 
-    tmp_dir.mkdir(exist_ok=True)
+    tmp_dir.mkdir(parents=True, exist_ok=True)
     cmd = [
         str(FFMPEG_PATH), "-y", "-hide_banner", "-loglevel", "error", "-stats",
         "-i", str(path),
@@ -228,6 +235,8 @@ def split_one(path: Path) -> bool:
         str(tmp_dir / f"part%04d{path.suffix}"),
     ]
     print(f"  命令: {' '.join(cmd)}")
+    if SPLIT_TMP_BASE:
+        print(f"  暂存盘: {tmp_dir.anchor}")
     result = subprocess.run(cmd)
 
     if result.returncode != 0:
@@ -248,7 +257,9 @@ def split_one(path: Path) -> bool:
         shutil.rmtree(tmp_dir, ignore_errors=True)
         return False
 
-    # 分片移到原目录并重命名
+    # 分片移到原目录并重命名 (跨盘时为复制, 稍慢)
+    if SPLIT_TMP_BASE:
+        print(f"  校验通过, 从暂存盘拷回 {total_parts_size / 1024 / 1024:.0f}MB...")
     for i, part in enumerate(parts, start=1):
         dest = path.with_name(f"{path.stem}{PART_MARK}{i:04d}{path.suffix}")
         size_mb = part.stat().st_size / 1024 / 1024
