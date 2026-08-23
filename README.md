@@ -69,6 +69,36 @@ SSH_KEY = Path("C:/Users/your_username/.ssh/id_rsa")
 RSYNC_PATH = "rsync"  # 或 "C:/cwRsync/bin/rsync.exe"
 ```
 
+## 视频切片 (split_video.py)
+
+把超过 256MB 的大视频（如大疆拍摄）切成约 256MB 片段，方便手机上传网盘。
+
+### 完整流程（双击 bat 自动执行）
+
+1. **切片**：大视频切成 `*_part0001.mp4` 等片段（只保留视频+音频流，丢弃 dbgi/djmd/tmcd 私有数据流）
+2. **rsync 同步**：源视频 + 切片全部同步到远端两块盘
+3. **推送手机**（远端 `sync_to_pixel`）：只推切片到 PixelShare，源视频按大小过滤跳过（远端 `backup_media` 的 `max_file_size_mb = 256`）
+4. **本地清理**：推送成功后删除本地切片（源视频保留），并记录到 `.parts_synced.json`，下次不会重切重传
+
+### 依赖
+
+- ffmpeg 9.0（放在本目录，`FFMPEG_PATH` 自动引用）
+
+### 使用
+
+```bash
+python split_video.py --dry-run      # 先预览将要处理的文件
+python split_video.py                # 执行切片（源视频保留）
+```
+
+### 说明
+
+- `-c copy` 无损切割，不重新编码，速度快且画质无损
+- 切片丢弃私有数据流（新版 ffmpeg 不支持写入，且手机上传用不到），视频/音频完整保留
+- 切片在临时目录完成后校验（片数、总大小），通过才移入原目录，中断不留半成品
+- 已切过或已完成全流程（状态文件记录）的自动跳过
+- `SPLIT_MIN_DATE`：只切该日期及之后目录的视频（按目录名 YYYYMMDD 前缀判断），历史文件不动；设为 `None` 不限制
+
 ## 使用
 
 ```bash

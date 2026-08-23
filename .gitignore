@@ -3,3 +3,21 @@ config.py
 
 # Claude Code 配置目录
 .claude/
+
+# 日志
+logs/
+
+# 运行锁
+.sync.lock
+
+# 切片完成状态
+.parts_synced.json
+
+# Python
+__pycache__/
+
+# 快捷方式
+*.lnk
+
+# 二进制依赖
+ffmpeg.exe

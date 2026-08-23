@@ -10,6 +10,7 @@
 """
 
 from pathlib import Path
+from datetime import date
 
 # ============ 配置区域 ============
 
@@ -35,5 +36,23 @@ SSH_PATH = r"D:\path\to\cwrsync\bin\ssh.exe"
 # 这些目录即使超过清理天数也不会被删除
 # 示例: EXCLUDE_CLEANUP_DIRS = {"重要目录", "另一个目录"}
 EXCLUDE_CLEANUP_DIRS = set()
+
+# 视频切片配置 (split_video.py)
+FFMPEG_PATH = r"D:\path\to\ffmpeg.exe"
+SPLIT_TARGET_SIZE_MB = 256   # 每个切片的目标大小 (MB)
+SPLIT_MIN_SIZE_MB = 256      # 只处理超过此大小的视频 (MB)
+SPLIT_SIZE_RATIO = 0.95      # 切片时长估算安全系数, 防止关键帧对齐后超出目标大小
+VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v"}
+
+# 切片临时目录 (建议指向 SSD, 避免 HDD 同盘混合读写; 切完校验后拷回源目录)
+# 设为 None 则在源文件旁边建 .splitting 临时目录
+SPLIT_TMP_BASE = Path("F:/split_tmp")
+
+# 只切片此日期之后(含当天)新增的视频, 之前的历史文件不动
+# 设为 None 则不限制日期
+SPLIT_MIN_DATE = date(2026, 8, 23)
+
+# 同步前是否自动切片大视频 (sync_album_backup.py 主流程调用)
+AUTO_SPLIT_BEFORE_SYNC = True
 
 # ============ 配置结束 ============

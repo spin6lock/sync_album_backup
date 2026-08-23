@@ -12,6 +12,8 @@
 import os
 import subprocess
 import shutil
+import sys
+import msvcrt
 from pathlib import Path
 from datetime import datetime
 import time
@@ -27,7 +29,59 @@ from config import (
     SSH_PATH,
     EXCLUDE_CLEANUP_DIRS,
     REMOTE_SYNC_TO_PIXEL_CMD,
+    AUTO_SPLIT_BEFORE_SYNC,
 )
+
+LOG_DIR_NAME = "logs"
+LOG_GLOB = "sync_*.log"
+LOG_KEEP = 7
+
+
+class Tee:
+    """同时写入控制台与日志文件（子进程继承的 stdout/stderr 也会经过此处）"""
+
+    def __init__(self, *streams):
+        self.streams = streams
+
+    def write(self, data: str) -> int:
+        for s in self.streams:
+            s.write(data)
+            s.flush()
+        return len(data)
+
+    def flush(self) -> None:
+        for s in self.streams:
+            s.flush()
+
+
+def _log_dir() -> Path:
+    return Path(__file__).resolve().parent / LOG_DIR_NAME
+
+
+def setup_run_logging() -> tuple[Path, object]:
+    """创建按日期时间的日志文件，并 tee stdout/stderr。"""
+    log_dir = _log_dir()
+    log_dir.mkdir(exist_ok=True)
+    stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    log_path = log_dir / f"sync_{stamp}.log"
+    log_file = open(log_path, "w", encoding="utf-8")
+    sys.stdout = Tee(sys.__stdout__, log_file)
+    sys.stderr = Tee(sys.__stderr__, log_file)
+    print(f"日志文件: {log_path}")
+    return log_path, log_file
+
+
+def prune_old_logs(keep: int = LOG_KEEP) -> None:
+    """仅保留最近的 keep 个 sync_*.log（按修改时间）。"""
+    log_dir = _log_dir()
+    if not log_dir.is_dir():
+        return
+    files = sorted(log_dir.glob(LOG_GLOB), key=lambda p: p.stat().st_mtime, reverse=True)
+    for old in files[keep:]:
+        try:
+            old.unlink()
+        except OSError:
+            pass
 
 
 def build_ssh_command() -> str:
@@ -46,16 +100,25 @@ def sync_with_rsync(src_dir: Path, remote_path: str, remote_user: str, remote_ho
     if len(src_str) >= 2 and src_str[1] == ":":
         src_str = "/cygdrive/" + src_str[0] + src_str[2:]
 
-    # rsync 命令: -a 归档模式, -v 详细, -P 显示进度
-    cmd_str = f'{RSYNC_PATH} -avP -e "{ssh_cmd}" "{src_str}/" {remote_user}@{remote_host}:{remote_path}/'
+    # rsync 命令: -a 归档模式, -v 详细, -P 显示进度; 排除切片临时目录
+    cmd_str = (f'{RSYNC_PATH} -avP --exclude="*.splitting" '
+               f'-e "{ssh_cmd}" "{src_str}/" {remote_user}@{remote_host}:{remote_path}/')
 
     print(f"  从: {src_dir}")
     print(f"  到: {remote_user}@{remote_host}:{remote_path}")
     print(f"  命令: {cmd_str}")
 
+    # 输出通过管道转发, 保证 rsync 的进度和错误信息也写入日志文件
     try:
-        result = subprocess.run(cmd_str, shell=True, capture_output=False)
-        return result.returncode == 0
+        proc = subprocess.Popen(cmd_str, shell=True, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT)
+        for chunk in iter(lambda: proc.stdout.read1(4096), b""):
+            sys.stdout.write(chunk.decode("utf-8", errors="replace"))
+            sys.stdout.flush()
+        proc.wait()
+        if proc.returncode != 0:
+            print(f"  rsync 返回码: {proc.returncode}")
+        return proc.returncode == 0
     except Exception as e:
         print(f"  错误: {e}")
         return False
@@ -119,8 +182,8 @@ def cleanup_old_dirs(source_base: Path, days: int = 30) -> None:
         print(f"  清理失败: {e}")
 
 
-def sync_to_pixel():
-    """同步到 Pixel 设备（通过 SSH 在远端执行）"""
+def sync_to_pixel() -> bool:
+    """同步到 Pixel 设备（通过 SSH 在远端执行）, 返回是否成功"""
     print("\n正在执行远端 sync_to_pixel...")
 
     # 将 SSH 路径转换为正斜杠格式
@@ -139,10 +202,13 @@ def sync_to_pixel():
         result = subprocess.run(cmd, capture_output=False)
         if result.returncode == 0:
             print("  远端 sync_to_pixel 执行成功")
+            return True
         else:
             print(f"  远端 sync_to_pixel 执行失败，返回码: {result.returncode}")
+            return False
     except Exception as e:
         print(f"  错误: {e}")
+        return False
 
 
 def main():
@@ -157,6 +223,14 @@ def main():
     if not SOURCE_BASE.exists():
         print(f"错误：源目录 {SOURCE_BASE} 不存在")
         return 1
+
+    # 同步前先把大视频切成小片段(源文件保留); 只要有失败就中止, 避免漏切
+    if AUTO_SPLIT_BEFORE_SYNC:
+        from split_video import run_split
+        if not run_split():
+            print("\n错误：视频切片未全部成功，本次中止同步。")
+            print("可单独运行 python split_video.py 排查，成功后再重新备份。")
+            return 1
 
     # 遍历源目录下的所有子目录
     for src_dir in SOURCE_BASE.iterdir():
@@ -179,10 +253,33 @@ def main():
     # 清理源目录过期目录
     cleanup_old_dirs(SOURCE_BASE, days=30)
 
-    sync_to_pixel()
+    # 推送手机(远端只推切片, 源文件被大小过滤跳过); 成功后删除本地切片
+    # (源视频保留, 切片远端有双备份; 标记后下次不会重切重传)
+    if sync_to_pixel():
+        from split_video import finish_sync
+        n = finish_sync()
+        print(f"\n全流程完成, 已删除本地切片 {n} 个")
+    else:
+        print("\nsync_to_pixel 未成功, 本地切片保留, 下次运行时重新处理")
 
     return 0
 
 
 if __name__ == "__main__":
-    exit(main())
+    # 单实例锁: 防止双击两次 bat 并发运行 (进程退出后锁自动释放)
+    lock_fp = open(Path(__file__).resolve().parent / ".sync.lock", "w")
+    try:
+        msvcrt.locking(lock_fp.fileno(), msvcrt.LK_NBLCK, 1)
+    except OSError:
+        print("已有另一个备份进程在运行，本次退出")
+        raise SystemExit(1)
+
+    _, log_fp = setup_run_logging()
+    try:
+        code = main()
+    finally:
+        sys.stdout = sys.__stdout__
+        sys.stderr = sys.__stderr__
+        log_fp.close()
+        prune_old_logs()
+    raise SystemExit(code)
