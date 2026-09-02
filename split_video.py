@@ -216,7 +216,8 @@ def split_one(path: Path) -> bool:
     file_bps = size_bytes * 8 / duration
     bps = content_bps if content_bps else file_bps
     seg_seconds = SPLIT_TARGET_SIZE_MB * 1024 * 1024 * 8 / bps * SPLIT_SIZE_RATIO
-    expected_parts = max(2, math.ceil(duration / seg_seconds))
+    # 刚超阈值的文件去掉私有流后可能 1 片就装得下, 不强制 2 片
+    expected_parts = max(1, math.ceil(duration / seg_seconds))
     expect_bytes = bps / 8 * duration
 
     print(f"  大小: {size_bytes / 1024 / 1024:.1f}MB, 时长: {duration:.1f}s, "
@@ -248,12 +249,21 @@ def split_one(path: Path) -> bool:
     total_parts_size = sum(p.stat().st_size for p in parts)
 
     # 校验: 片数足够, 总大小接近按内容码率的估算值
-    ok_count = len(parts) >= expected_parts - 1 and len(parts) >= 2
+    # 单片时额外要求不超过目标大小(保证手机端可推送)
+    ok_count = len(parts) >= expected_parts - 1 and len(parts) >= 1
     ok_size = total_parts_size >= expect_bytes * 0.85
-    if not (ok_count and ok_size):
-        print(f"  校验失败(片数 {len(parts)}/{expected_parts}, "
-              f"总大小 {total_parts_size / 1024 / 1024:.1f}MB/"
-              f"{expect_bytes / 1024 / 1024:.1f}MB): {path.name}")
+    ok_single = len(parts) > 1 or total_parts_size <= SPLIT_TARGET_SIZE_MB * 1024 * 1024
+    if not (ok_count and ok_size and ok_single):
+        reason = []
+        if not ok_count:
+            reason.append(f"片数 {len(parts)}/{expected_parts}")
+        if not ok_size:
+            reason.append(f"总大小 {total_parts_size / 1024 / 1024:.1f}MB/"
+                          f"{expect_bytes / 1024 / 1024:.1f}MB")
+        if not ok_single:
+            reason.append(f"单片 {total_parts_size / 1024 / 1024:.1f}MB 超过目标 "
+                          f"{SPLIT_TARGET_SIZE_MB}MB")
+        print(f"  校验失败({', '.join(reason)}): {path.name}")
         shutil.rmtree(tmp_dir, ignore_errors=True)
         return False
 

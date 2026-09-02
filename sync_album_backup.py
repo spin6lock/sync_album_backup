@@ -199,7 +199,9 @@ def sync_to_pixel() -> bool:
     print(f"  命令: {' '.join(cmd)}")
 
     try:
-        result = subprocess.run(cmd, capture_output=False)
+        # 远端脚本有交互确认(如 "need backup? [Y/n]"), 无人值守时读到 EOF 会报错退出,
+        # 这里通过 stdin 自动应答 y (多备几个以防后续还有确认)
+        result = subprocess.run(cmd, capture_output=False, input=b"y\ny\ny\n")
         if result.returncode == 0:
             print("  远端 sync_to_pixel 执行成功")
             return True
